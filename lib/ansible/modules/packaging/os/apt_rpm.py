@@ -78,7 +78,7 @@ RPM_PATH = "/usr/bin/rpm"
 def query_package(module, name):
     # rpm -q returns 0 if the package is installed,
     # 1 if it is not installed
-    rc, out, err = module.run_command("%s -q %s" % (RPM_PATH, name))
+    rc, out, err = module.run_command("%s -q %s" % (RPM_PATH, name.replace("=", "-")))
     if rc == 0:
         return True
     else:
@@ -88,7 +88,7 @@ def query_package(module, name):
 def query_package_provides(module, name):
     # rpm -q returns 0 if the package is installed,
     # 1 if it is not installed
-    rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, name))
+    rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, name.replace("=", "-")))
     return rc == 0
 
 
