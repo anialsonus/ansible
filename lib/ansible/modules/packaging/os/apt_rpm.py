@@ -32,7 +32,7 @@ options:
   state:
     description:
       - Indicates the desired package state.
-    choices: [ absent, present ]
+    choices: [ absent, latest, present ]
     default: present
   update_cache:
     description:
@@ -61,12 +61,12 @@ EXAMPLES = '''
     pkg: foo,bar
     state: absent
 
-# bar will be the updated if a newer version exists
+# bar will be the updated if a newer version exists ("update_cache: yes" will be set implicitly)
 - name: Update the package database and install bar
   apt_rpm:
     name: bar
-    state: present
-    update_cache: yes
+    state: latest
+    
 '''
 
 import json
@@ -126,11 +126,11 @@ def remove_packages(module, packages):
     module.exit_json(changed=False, msg="package(s) already absent")
 
 
-def install_packages(module, pkgspec):
+def install_packages(module, pkgspec, latest=False):
 
     packages = ""
     for package in pkgspec:
-        if not query_package_provides(module, package):
+        if not query_package_provides(module, package) or latest:
             packages += "'%s' " % package
 
     if len(packages) != 0:
@@ -154,7 +154,7 @@ def install_packages(module, pkgspec):
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            state=dict(type='str', default='installed', choices=['absent', 'installed', 'present', 'removed']),
+            state=dict(type='str', default='installed', choices=['absent', 'installed', 'latest', 'present', 'removed']),
             update_cache=dict(type='bool', default=False, aliases=['update-cache']),
             package=dict(type='list', elements='str', required=True, aliases=['name', 'pkg']),
         ),
@@ -172,6 +172,11 @@ def main():
 
     if p['state'] in ['installed', 'present']:
         install_packages(module, packages)
+
+    elif p['state'] == 'latest':
+        p['update_cache'] = True
+        update_package_db(module)
+        install_packages(module, packages, latest=True)
 
     elif p['state'] in ['absent', 'removed']:
         remove_packages(module, packages)
