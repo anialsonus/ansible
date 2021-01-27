@@ -5,6 +5,8 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
+import json
+from datetime import datetime
 
 from units.compat import unittest
 from units.compat.mock import patch, MagicMock
@@ -12,11 +14,44 @@ from units.compat.mock import patch, MagicMock
 from ansible.executor.play_iterator import PlayIterator
 from ansible.playbook import Playbook
 from ansible.playbook.play_context import PlayContext
+from ansible.plugins.action.command import ActionModule as CommandAction
 from ansible.plugins.strategy.linear import StrategyModule
 from ansible.executor.task_queue_manager import TaskQueueManager
+from ansible.inventory.manager import InventoryManager
 
 from units.mock.loader import DictDataLoader
 from units.mock.path import mock_unfrackpath_noop
+
+
+def mock_command_run(*args, **kwargs):
+    """Mock successful execution of /bin/true"""
+    result = {
+        'cmd': '/bin/true',
+        'stdout': '',
+        'stderr': '',
+        'rc': 0,
+        'start': datetime.now().isoformat(),
+        'end': datetime.now().isoformat(),
+        'delta': '0:00:00.000010',
+        'changed': True,
+        'invocation': {'module_args': {
+            '_raw_params': '/bin/true',
+            '_uses_shell': True,
+            'warn': True,
+            'stdin_add_newline': True,
+            'strip_empty_ends': True,
+            'argv': None,
+            'chdir': None,
+            'executable': None,
+            'creates': None,
+            'removes': None,
+            'stdin': None
+        }},
+        '_ansible_parsed': True,
+        'stdout_lines': [],
+        'stderr_lines': []
+    }
+    return result
 
 
 class TestStrategyLinear(unittest.TestCase):
@@ -178,3 +213,80 @@ class TestStrategyLinear(unittest.TestCase):
         host2_task = hosts_tasks[1][1]
         self.assertIsNone(host1_task)
         self.assertIsNone(host2_task)
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    @patch.object(CommandAction, 'run', mock_command_run)
+    def test_ignore_max_fail_percentage(self):
+        test_inventory = json.dumps({
+            'test': {
+                'hosts': {
+                    'test_host_1': {},
+                    'test_host_2': {}
+                }
+            }
+        })
+        fake_loader = DictDataLoader({
+            "test_play.yml": """
+                - name: FAILING PLAY
+                  hosts: test
+                  gather_facts: no
+                  any_errors_fatal: true
+                  tasks:
+                    - name: successful-task
+                      command: /bin/true
+                      notify: failing-handler
+                  handlers:
+                    - name: failing-handler
+                      fail:
+                      when: ansible_host == 'test_host_2'
+    
+                - name: POST-FAIL PLAY
+                  hosts: test
+                  gather_facts: no
+                  tasks:
+                    - name: 'post-fail play'
+                      debug: msg='UNEXPECTED PLAY RUN'
+            """,
+            "test_inventory.json": test_inventory
+        })
+
+        mock_var_manager = MagicMock()
+        mock_var_manager._fact_cache = dict()
+        mock_var_manager.get_vars.return_value = dict()
+
+        host_names = []
+        inventory = InventoryManager(loader=fake_loader, sources="test_inventory.json")
+        for host in inventory.get_hosts(pattern='test'):
+            host_names.append(host.name)
+            mock_var_manager._fact_cache[host.name] = dict()
+
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=mock_var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        tqm._initialize_processes(3)
+
+        strategy = StrategyModule(tqm)
+        strategy._hosts_cache = host_names
+        strategy._hosts_cache_all = host_names
+
+        play_book = Playbook.load('test_play.yml', loader=fake_loader, variable_manager=mock_var_manager)
+        for play in play_book.get_plays():
+            play_context = PlayContext(play=play)
+            play_iterator = PlayIterator(
+                inventory=inventory,
+                play=play,
+                play_context=play_context,
+                variable_manager=mock_var_manager,
+                all_vars=dict(),
+            )
+            play_return_code = strategy.run(play_iterator, play_context)
+            # handler fails only once, but both hosts are marked failed
+            # next play runs with empty host list (all were failed before)
+            self.assertDictEqual(tqm._failed_hosts, {'test_host_2': True, 'test_host_1': True})
+            self.assertEqual(play_return_code, tqm.RUN_FAILED_BREAK_PLAY)

@@ -1,0 +1,2 @@
+bugfixes:
+  - resolve any_errors_fatal and max_fail_percentage conflicting behavior in favor of former

@@ -419,8 +419,13 @@ class StrategyModule(StrategyBase):
                 display.debug("done checking for any_errors_fatal")
 
                 display.debug("checking for max_fail_percentage")
-                if iterator._play.max_fail_percentage is not None and len(results) > 0:
-                    percentage = iterator._play.max_fail_percentage / 100.0
+                # any_errors_fatal and max_fail_percentage have conflicting behavior
+                # any_errors_fatal is decided to have priority and max_fail_percentage is (re)setted to 0
+                max_fail_percentage = iterator._play.max_fail_percentage
+                if any_errors_fatal:
+                    max_fail_percentage = 0
+                if max_fail_percentage is not None and len(results) > 0:
+                    percentage = max_fail_percentage / 100.0
 
                     if (len(self._tqm._failed_hosts) / iterator.batch_size) > percentage:
                         for host in hosts_left:
