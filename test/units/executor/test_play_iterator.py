@@ -27,6 +27,9 @@ from ansible.executor.play_iterator import HostState, PlayIterator
 from ansible.playbook import Playbook
 from ansible.playbook.task import Task
 from ansible.playbook.play_context import PlayContext
+from ansible.executor.task_queue_manager import TaskQueueManager
+from ansible.inventory.manager import InventoryManager
+from ansible.vars.manager import VariableManager
 
 from units.mock.loader import DictDataLoader
 from units.mock.path import mock_unfrackpath_noop
@@ -464,3 +467,115 @@ class TestPlayIterator(unittest.TestCase):
         # test a regular insertion
         s_copy = s.copy()
         res_state = itr._insert_tasks_into_state(s_copy, task_list=[MagicMock()])
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    def test_failed_block_with_always(self):
+        fake_loader = DictDataLoader({
+            "playbook.yml": failing_block_with_always,
+            "inventory.yml": inventory_yml,
+        })
+        inventory = InventoryManager(loader=fake_loader, sources="inventory.yml")
+        var_manager = VariableManager(loader=fake_loader, inventory=inventory)
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        play_book = Playbook.load(
+            'playbook.yml',
+            loader=fake_loader,
+            variable_manager=var_manager
+        )
+        for play in play_book.get_plays():
+            play_return_code = tqm.run(play)
+            self.assertEqual(play_return_code, tqm.RUN_FAILED_BREAK_PLAY)
+            self.assertDictEqual(tqm._failed_hosts, {'test_host_2': True, 'test_host_1': True})
+            break
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    def test_rescued_block_with_always(self):
+        fake_loader = DictDataLoader({
+            "playbook.yml": rescued_block_with_always,
+            "inventory.yml": inventory_yml,
+        })
+        inventory = InventoryManager(loader=fake_loader, sources="inventory.yml")
+        var_manager = VariableManager(loader=fake_loader, inventory=inventory)
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        play_book = Playbook.load(
+            'playbook.yml',
+            loader=fake_loader,
+            variable_manager=var_manager
+        )
+        for play in play_book.get_plays():
+            play_return_code = tqm.run(play)
+            print()
+            print(play_return_code, tqm._failed_hosts)
+            self.assertEqual(play_return_code, tqm.RUN_OK)
+            self.assertDictEqual(tqm._failed_hosts, {})
+            break
+
+
+inventory_yml = '''
+---
+all:
+  hosts:
+    test_host_1:
+      ansible_connection: local
+    test_host_2:
+      ansible_connection: local
+'''
+failing_block_with_always = '''
+---
+- name: BLOCKED PLAY
+  hosts: all
+  gather_facts: no
+  any_errors_fatal: false
+  tasks:
+    - block:
+      - debug: msg='first in block'
+      - name: FAILING TASK
+        fail:
+        when: ansible_host == 'test_host_2'
+      - debug: msg='second in block'
+      always:
+      - name: ALWAYS 
+        debug: msg='in always'      
+      any_errors_fatal: true
+    - name: AFTER-BLOCK
+      debug: msg='after-block task'
+'''
+rescued_block_with_always = '''
+---
+- name: BLOCKED PLAY
+  hosts: all
+  gather_facts: no
+  any_errors_fatal: false
+  tasks:
+    - block:
+      - debug: msg='first in block'
+      - name: FAILING TASK
+        fail:
+        when: ansible_host == 'test_host_2'
+      - debug: msg='second in block'
+      rescue:
+      - name: RESCUE
+        meta: clear_host_errors
+      always:
+      - name: ALWAYS 
+        debug: msg='in always'      
+      any_errors_fatal: true
+    - name: AFTER-BLOCK
+      debug: msg='after-block task'
+'''

@@ -5,6 +5,7 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
+from datetime import datetime
 
 from units.compat import unittest
 from units.compat.mock import patch, MagicMock
@@ -12,11 +13,45 @@ from units.compat.mock import patch, MagicMock
 from ansible.executor.play_iterator import PlayIterator
 from ansible.playbook import Playbook
 from ansible.playbook.play_context import PlayContext
+from ansible.plugins.action.command import ActionModule as CommandAction
 from ansible.plugins.strategy.linear import StrategyModule
 from ansible.executor.task_queue_manager import TaskQueueManager
+from ansible.inventory.manager import InventoryManager
+from ansible.vars.manager import VariableManager
 
 from units.mock.loader import DictDataLoader
 from units.mock.path import mock_unfrackpath_noop
+
+
+def mock_command_run(*args, **kwargs):
+    """Mock successful execution of /bin/true"""
+    result = {
+        'cmd': '/bin/true',
+        'stdout': '',
+        'stderr': '',
+        'rc': 0,
+        'start': datetime.now().isoformat(),
+        'end': datetime.now().isoformat(),
+        'delta': '0:00:00.000010',
+        'changed': True,
+        'invocation': {'module_args': {
+            '_raw_params': '/bin/true',
+            '_uses_shell': True,
+            'warn': True,
+            'stdin_add_newline': True,
+            'strip_empty_ends': True,
+            'argv': None,
+            'chdir': None,
+            'executable': None,
+            'creates': None,
+            'removes': None,
+            'stdin': None
+        }},
+        '_ansible_parsed': True,
+        'stdout_lines': [],
+        'stderr_lines': []
+    }
+    return result
 
 
 class TestStrategyLinear(unittest.TestCase):
@@ -178,3 +213,188 @@ class TestStrategyLinear(unittest.TestCase):
         host2_task = hosts_tasks[1][1]
         self.assertIsNone(host1_task)
         self.assertIsNone(host2_task)
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    @patch.object(CommandAction, 'run', mock_command_run)
+    def test_ignore_max_fail_percentage(self):
+        fake_loader = DictDataLoader({
+            "playbook.yml": failing_handler_yml,
+            "inventory.yml": inventory_yml,
+        })
+        inventory = InventoryManager(loader=fake_loader, sources="inventory.yml")
+        var_manager = VariableManager(loader=fake_loader, inventory=inventory)
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        play_book = Playbook.load(
+            'playbook.yml',
+            loader=fake_loader,
+            variable_manager=var_manager
+        )
+        for play in play_book.get_plays():
+            play_return_code = tqm.run(play)
+            # handler fails only once, but both hosts are marked failed
+            # next play runs with empty host list (all were failed before)
+            self.assertEqual(play_return_code, tqm.RUN_FAILED_BREAK_PLAY)
+            self.assertDictEqual(tqm._failed_hosts, {'test_host_2': True, 'test_host_1': True})
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    def test_max_fail_percentage(self):
+        fake_loader = DictDataLoader({
+            "playbook.yml": fail_percentage_60_yml,
+            "inventory.yml": inventory_yml,
+        })
+        inventory = InventoryManager(loader=fake_loader, sources="inventory.yml")
+        var_manager = VariableManager(loader=fake_loader, inventory=inventory)
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        play_book = Playbook.load(
+            'playbook.yml',
+            loader=fake_loader,
+            variable_manager=var_manager
+        )
+        for play in play_book.get_plays():
+            play_return_code = tqm.run(play)
+            # handler fails only once, but both hosts are marked failed
+            # next play runs with empty host list (all were failed before)
+            self.assertEqual(play_return_code, tqm.RUN_FAILED_HOSTS)
+            self.assertDictEqual(tqm._failed_hosts, {'test_host_1': True})
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    def test_max_fail_percentage_reached(self):
+        fake_loader = DictDataLoader({
+            "playbook.yml": fail_percentage_40_yml,
+            "inventory.yml": inventory_yml,
+        })
+        inventory = InventoryManager(loader=fake_loader, sources="inventory.yml")
+        var_manager = VariableManager(loader=fake_loader, inventory=inventory)
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        play_book = Playbook.load(
+            'playbook.yml',
+            loader=fake_loader,
+            variable_manager=var_manager
+        )
+        for play in play_book.get_plays():
+            play_return_code = tqm.run(play)
+            self.assertEqual(play_return_code, tqm.RUN_FAILED_BREAK_PLAY)
+            self.assertDictEqual(tqm._failed_hosts, {'test_host_2': True, 'test_host_1': True})
+
+    @patch('ansible.inventory.manager.unfrackpath', mock_unfrackpath_noop)
+    @patch('os.path.exists', lambda x: True)
+    @patch('os.access', lambda x, y: True)
+    def test_last_task_failed_in_block_with_always(self):
+        """
+        Mostly the same as TestPlayIterator.test_failed_block_with_always
+        in units/executor/test_play_iterator.py, but failing task is last in block
+        """
+        fake_loader = DictDataLoader({
+            "playbook.yml": last_failing_in_block_with_always,
+            "inventory.yml": inventory_yml,
+        })
+        inventory = InventoryManager(loader=fake_loader, sources="inventory.yml")
+        var_manager = VariableManager(loader=fake_loader, inventory=inventory)
+        tqm = TaskQueueManager(
+            inventory=inventory,
+            variable_manager=var_manager,
+            loader=fake_loader,
+            passwords=None,
+            forks=3,
+        )
+        play_book = Playbook.load(
+            'playbook.yml',
+            loader=fake_loader,
+            variable_manager=var_manager
+        )
+        for play in play_book.get_plays():
+            play_return_code = tqm.run(play)
+            self.assertEqual(play_return_code, tqm.RUN_FAILED_BREAK_PLAY)
+            self.assertDictEqual(tqm._failed_hosts, {'test_host_2': True, 'test_host_1': True})
+            break
+
+
+inventory_yml = '''
+---
+all:
+  hosts:
+    test_host_1:
+      ansible_connection: local
+    test_host_2:
+      ansible_connection: local
+'''
+failing_handler_yml = """
+---
+- name: FAILING PLAY
+  hosts: all
+  gather_facts: no
+  any_errors_fatal: true
+  tasks:
+    - name: SUCCESSFUL TASK
+      command: /bin/true
+      notify: FAILING HANDLER
+  handlers:
+    - name: FAILING HANDLER
+      fail:
+      when: ansible_host == 'test_host_2'
+"""
+last_failing_in_block_with_always = '''
+---
+- name: BLOCKED PLAY
+  hosts: all
+  gather_facts: no
+  any_errors_fatal: false
+  tasks:
+    - block:
+      - debug: msg='first in block'
+      - name: FAILING TASK
+        fail:
+        when: ansible_host == 'test_host_2'
+      always:
+      - name: ALWAYS 
+        debug: msg='in always'      
+      any_errors_fatal: true
+    - name: AFTER-BLOCK
+      debug: msg='after-block task'
+'''
+fail_percentage_60_yml = '''
+---
+- name: SUCCESSFUL PLAY
+  hosts: all
+  gather_facts: no
+  max_fail_percentage: 60
+  tasks:
+    - name: FLAKY TASK
+      fail:
+      when: ansible_host == 'test_host_1'
+'''
+fail_percentage_40_yml = '''
+---
+- name: FAILING PLAY
+  hosts: all
+  gather_facts: no
+  max_fail_percentage: 40
+  tasks:
+    - name: FLAKY TASK
+      fail:
+      when: ansible_host == 'test_host_2'
+'''
