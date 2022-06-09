@@ -80,21 +80,15 @@ from ansible.module_utils.basic import AnsibleModule
 ENCODING = 'utf-8'
 
 APT_PATH = "/usr/bin/apt-get"
-APT_CACHE_PATH = "/usr/bin/apt-cache"
 RPM_PATH = "/usr/bin/rpm"
 
-ALIAS_PATTERN = r'Reverse Provides:.*?\b(?P<alias>[\w-]+)\b'
 
-
-def get_pkg_name_alias(module, name):
-    rc, out, err = module.run_command("%s showpkg %s" % (APT_CACHE_PATH, name.replace("=", "-")))
+def get_whatprovides_output(module, name):
+    rc, out, err = module.run_command("%s -q --whatprovides %s" % (RPM_PATH, name.replace("=", "-")))
     if rc:
         return None
-    out = out.decode(ENCODING).strip(os.linesep)
-    alias = re.search(ALIAS_PATTERN, out, re.DOTALL).group('alias')
-    if alias and alias != name:
-        return alias
-    return None
+    provides = [i for i in out.decode(ENCODING).splitlines() if i]
+    return provides
 
 
 def query_package(module, name):
@@ -117,9 +111,10 @@ def query_package_provides(module, name):
         # apt-get -y install 'python-module-MySQLdb'
         # ...
         # Selecting python-module-mysqlclient for 'python-module-MySQLdb'
-        alias = get_pkg_name_alias(module, name)
-        if alias is not None:
-            rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, alias.replace("=", "-")))
+        for provides_pkg in get_whatprovides_output(module, name):
+            rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, provides_pkg))
+            if rc:
+                break
     return rc == 0
 
 
@@ -188,7 +183,6 @@ def main():
 
     if not all([
             os.path.exists(APT_PATH),
-            os.path.exists(APT_CACHE_PATH),
             os.path.exists(RPM_PATH),
     ]):
         module.fail_json(msg="cannot find /usr/bin/apt-get and/or /usr/bin/rpm")
