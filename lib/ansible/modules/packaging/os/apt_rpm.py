@@ -86,7 +86,7 @@ RPM_PATH = "/usr/bin/rpm"
 def get_whatprovides_output(module, name):
     rc, out, err = module.run_command("%s -q --whatprovides %s" % (RPM_PATH, name.replace("=", "-")))
     if rc:
-        return None
+        return []
     provides = [i for i in out.decode(ENCODING).splitlines() if i]
     return provides
 
