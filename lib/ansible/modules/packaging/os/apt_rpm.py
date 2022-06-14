@@ -76,8 +76,18 @@ import sys
 
 from ansible.module_utils.basic import AnsibleModule
 
+ENCODING = 'utf-8'
+
 APT_PATH = "/usr/bin/apt-get"
 RPM_PATH = "/usr/bin/rpm"
+
+
+def get_whatprovides_output(module, name):
+    rc, out, err = module.run_command("%s -q --whatprovides %s" % (RPM_PATH, name.replace("=", "-")))
+    if rc:
+        return []
+    provides = [i for i in out.decode(ENCODING).splitlines() if i]
+    return provides
 
 
 def query_package(module, name):
@@ -94,6 +104,16 @@ def query_package_provides(module, name):
     # rpm -q returns 0 if the package is installed,
     # 1 if it is not installed
     rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, name.replace("=", "-")))
+    if rc:
+        # pkg may be installed under a different name.
+        # Example:
+        # apt-get -y install 'python-module-MySQLdb'
+        # ...
+        # Selecting python-module-mysqlclient for 'python-module-MySQLdb'
+        for provides_pkg in get_whatprovides_output(module, name):
+            rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, provides_pkg))
+            if rc:
+                break
     return rc == 0
 
 
@@ -160,7 +180,10 @@ def main():
         ),
     )
 
-    if not os.path.exists(APT_PATH) or not os.path.exists(RPM_PATH):
+    if not all([
+            os.path.exists(APT_PATH),
+            os.path.exists(RPM_PATH),
+    ]):
         module.fail_json(msg="cannot find /usr/bin/apt-get and/or /usr/bin/rpm")
 
     p = module.params
