@@ -64,7 +64,10 @@ if getattr(C, 'DEFAULT_LOG_PATH'):
     if path and (os.path.exists(path) and os.access(path, os.W_OK)) or os.access(os.path.dirname(path), os.W_OK):
         logging.basicConfig(filename=path, level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
         mypid = str(os.getpid())
-        user = getpass.getuser()
+        try:
+            user = getpass.getuser()
+        except KeyError:
+            user = 'uid=%s' % os.getuid()
         logger = logging.getLogger("p=%s u=%s | " % (mypid, user))
         for handler in logging.root.handlers:
             handler.addFilter(FilterBlackList(getattr(C, 'DEFAULT_LOG_FILTER', [])))

@@ -332,7 +332,10 @@ class PlayContext(Base):
         if new_info.connection == 'local':
             if not new_info.connection_user:
                 new_info.connection_user = new_info.remote_user
-            new_info.remote_user = pwd.getpwuid(os.getuid()).pw_name
+            try:
+                new_info.remote_user = pwd.getpwuid(os.getuid()).pw_name
+            except KeyError:
+                new_info.remote_user = 'uid=%s' % os.getuid()
 
         # set no_log to default if it was not previously set
         if new_info.no_log is None:
