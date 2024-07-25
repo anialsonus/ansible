@@ -331,13 +331,9 @@ class ActionBase(with_metaclass(ABCMeta, object)):
 
         # deal with tmpdir creation
         basefile = 'ansible-tmp-%s-%s' % (time.time(), random.randint(0, 2**48))
-        # Network connection plugins (network_cli, netconf, etc.) execute on the controller, rather than the remote host.
+        # Force always use tmp directory instead of ~/.ansible
         # As such, we want to avoid using remote_user for paths  as remote_user may not line up with the local user
-        # This is a hack and should be solved by more intelligent handling of remote_tmp in 2.7
-        if getattr(self._connection, '_remote_is_local', False):
-            tmpdir = C.DEFAULT_LOCAL_TMP
-        else:
-            tmpdir = self._remote_expand_user(remote_tmp, sudoable=False)
+        tmpdir = C.DEFAULT_LOCAL_TMP
         cmd = self._connection._shell.mkdtemp(basefile=basefile, system=become_unprivileged, tmpdir=tmpdir)
         result = self._low_level_execute_command(cmd, sudoable=False)
 
